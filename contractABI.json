@@ -1,0 +1,64 @@
+[
+  {
+    "type": "function",
+    "name": "receiveProduct",
+    "inputs": [{ "name": "_productId", "type": "uint256" }],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "createProduct",
+    "inputs": [{ "name": "_name", "type": "string" }],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "shipProduct",
+    "inputs": [
+      { "name": "_productId", "type": "uint256" },
+      { "name": "_receiver", "type": "address" }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "recallProduct",
+    "inputs": [{ "name": "_id", "type": "uint256" }],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "products",
+    "inputs": [{ "name": "pId", "type": "uint256" }],
+    "outputs": [
+      { "name": "id", "type": "uint256" },
+      { "name": "name", "type": "string" },
+      { "name": "owner", "type": "address" },
+      { "name": "state", "type": "uint8" },
+      { "name": "timestamp", "type": "uint256" },
+      { "name": "creator", "type": "address" }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "productCount",
+    "inputs": [],
+    "outputs": [{ "name": "", "type": "uint256" }],
+    "stateMutability": "view"
+  },
+  {
+    "type": "event",
+    "name": "ProductShipped",
+    "inputs": [
+      { "name": "id", "type": "uint256", "indexed": true },
+      { "name": "from", "type": "address", "indexed": true },
+      { "name": "to", "type": "address", "indexed": true }
+    ],
+    "anonymous": false
+  }
+]
