@@ -5,41 +5,36 @@ import { useEffect, useMemo, useState } from "react";
 import { ethers } from "ethers";
 import Link from "next/link";
 
+// Path imports
 import {
   getBrowserProviderAfterConnect,
   getInjectedEthereum,
-} from "../lib/injected-ethereum"; 
-import { getSepoliaContractAddress } from "../lib/sepolia-contract";
+} from "../../lib/injected-ethereum";
+import { getSepoliaContractAddress } from "../../lib/sepolia-contract";
 
-import { ExplorerSection } from "./components/ExplorerSection";
-import contractABI from "../contractABI.json";
+import { ExplorerSection } from "../components/ExplorerSection";
+import { ShipProductCard } from "../components/ShipProductCard";
+import contractABI from "../../contractABI.json";
 
 const CONTRACT_ADDRESS = getSepoliaContractAddress();
 const SEPOLIA_CHAIN_ID = 11155111;
 
-export default function ReceiverPage() {
+export default function ShipperPage() {
   const abi = useMemo(() => {
     return contractABI as any[];
   }, []);
 
   const [walletAddress, setWalletAddress] = useState<string | null>(null);
   const [contractInstance, setContractInstance] = useState<ethers.Contract | null>(null);
-
   const [chainId, setChainId] = useState<number | null>(null);
-  const [productId, setProductId] = useState<string>("");
   const [statusMessage, setStatusMessage] = useState<string>("พร้อมรับการเชื่อมต่อ Wallet");
-
   const [isConnecting, setIsConnecting] = useState(false);
-  const [isReceiving, setIsReceiving] = useState(false);
   const [trackerRefreshToken, setTrackerRefreshToken] = useState(0);
   const [searchId, setSearchId] = useState<string>("");
 
-  const [coords, setCoords] = useState<{lat: number, lng: number} | null>(null);
+  // GPS State
+  const [coords, setCoords] = useState<{ lat: number; lng: number } | null>(null);
   const [isFetchingGps, setIsFetchingGps] = useState(false);
-
-  const canReceive = Boolean(
-    contractInstance && !isReceiving && productId.trim().length > 0
-  );
 
   useEffect(() => {
     const ethereum = getInjectedEthereum();
@@ -67,7 +62,7 @@ export default function ReceiverPage() {
     const handleAccountsChanged = (accounts: string[]) => {
       setWalletAddress(accounts?.[0] ?? null);
       setContractInstance(null);
-      setStatusMessage("ตรวจพบการเปลี่ยนบัญชี/เครือข่าย กรุณาเชื่อมต่อใหม่");
+      setStatusMessage("ตรวจพบการเปลี่ยนบัญชี กรุณาเชื่อมต่อใหม่");
     };
 
     const handleChainChanged = (id: string) => {
@@ -87,22 +82,8 @@ export default function ReceiverPage() {
     };
   }, []);
 
-  const getFriendlyRevertMessage = (err: any) => {
-    const raw = err?.reason ?? err?.shortMessage ?? err?.message ?? err?.data?.message ?? "Execution reverted";
-    const msg = String(raw);
-
-    if (/Not the product owner/i.test(msg)) return "❌ Not the product owner";
-    if (/Only the designated recipient can receive this product/i.test(msg)) return "❌ You are not the designated recipient";
-    if (/not shipped|Product not shipped/i.test(msg)) return "❌ Product not shipped";
-    if (/Only manager can perform this action/i.test(msg)) return "❌ Only manager can perform this action";
-    if (/user rejected|denied/i.test(msg)) return "❌ User rejected transaction signature";
-
-    return `❌ ${msg}`;
-  };
-
   const connectWallet = async () => {
     if (typeof window === "undefined") return;
-
     setIsConnecting(true);
     setStatusMessage("กำลังเชื่อมต่อ MetaMask...");
 
@@ -110,116 +91,38 @@ export default function ReceiverPage() {
       const conn = await getBrowserProviderAfterConnect();
       if (!conn.ok) {
         setStatusMessage(
-          conn.reason === "no-wallet" ? "ไม่พบ MetaMask ในเบราว์เซอร์นี้"
-            : conn.reason === "rejected" ? "ยกเลิกการเชื่อมต่อ MetaMask — ลองกด Connect อีกครั้ง"
-            : "ยังไม่มีบัญชีที่เชื่อมต่อ — เปิด MetaMask แล้วเลือกบัญชี"
+          conn.reason === "no-wallet" ? "ไม่พบ MetaMask"
+            : conn.reason === "rejected" ? "ยกเลิกการเชื่อมต่อ"
+            : "กรุณาเลือกบัญชีใน MetaMask"
         );
         return;
       }
 
       const provider = conn.provider;
       const network = await provider.getNetwork();
-      try { await provider.send("eth_chainId", []); } catch {}
-      
       setChainId(Number(network.chainId));
       const signer = await provider.getSigner();
       const address = await signer.getAddress();
 
       if (!Array.isArray(abi) || abi.length === 0) {
-        setStatusMessage("ยังไม่ได้ใส่ ABI ใน `contractABI.json` กรุณาวาง ABI ก่อนใช้งาน");
+        setStatusMessage("ไม่พบ ABI ในไฟล์ contractABI.json");
         setWalletAddress(address);
-        setContractInstance(null);
         return;
       }
 
       const contract = new ethers.Contract(CONTRACT_ADDRESS, abi, signer);
-
       setWalletAddress(address);
       setContractInstance(contract);
+      
       setStatusMessage(
         Number(network.chainId) === SEPOLIA_CHAIN_ID
-          ? "เชื่อมต่อ Wallet สำเร็จ พร้อมสำหรับการรับสินค้า"
-          : `⚠ เชื่อมต่อผิดเครือข่าย: กรุณาใช้ Sepolia (Chain ID: ${SEPOLIA_CHAIN_ID})`
+          ? "เชื่อมต่อสำเร็จ พร้อมส่งสินค้า"
+          : `⚠ กรุณาเปลี่ยนเป็น Sepolia (ID: ${SEPOLIA_CHAIN_ID})`
       );
     } catch (err: any) {
-      setStatusMessage(`เชื่อมต่อไม่สำเร็จ: ${err?.message ?? "Unknown error"}`);
+      setStatusMessage(`ข้อผิดพลาด: ${err?.message ?? "Unknown"}`);
     } finally {
       setIsConnecting(false);
-    }
-  };
-
-  const receiveProduct = async () => {
-    if (!contractInstance) {
-      setStatusMessage("กรุณาเชื่อมต่อ Wallet ก่อน");
-      return;
-    }
-
-    let currentChainId = chainId;
-    try {
-      const ethereum = getInjectedEthereum();
-      if (ethereum) {
-        const id = await ethereum.request({ method: "eth_chainId" });
-        currentChainId = typeof id === "string" ? parseInt(id, 16) : Number(id);
-        setChainId(currentChainId);
-      }
-    } catch {}
-
-    if (currentChainId !== SEPOLIA_CHAIN_ID) {
-      setStatusMessage(`⚠ โปรดสลับเครือข่ายเป็น Sepolia (Chain ID: ${SEPOLIA_CHAIN_ID}) ก่อน`);
-      return;
-    }
-
-    const raw = productId.trim();
-    if (!raw) {
-      setStatusMessage("กรุณากรอก Product ID ก่อน");
-      return;
-    }
-
-    let productIdBigInt: bigint;
-    try {
-      productIdBigInt = BigInt(raw);
-    } catch {
-      setStatusMessage("Product ID ต้องเป็นเลขจำนวนเต็ม (เช่น 4)");
-      return;
-    }
-
-    setIsReceiving(true);
-    setStatusMessage("กำลังส่งธุรกรรม receiveProduct()...");
-
-    try {
-      const activeWallet = walletAddress ? ethers.getAddress(walletAddress) : null;
-      const product = (await contractInstance.products(productIdBigInt)) as ethers.Result;
-      const currentOwner = ethers.getAddress(String(product[2]));
-      const currentState = Number(product[3]);
-
-      if (!activeWallet || currentOwner.toLowerCase() !== activeWallet.toLowerCase()) {
-        setStatusMessage("❌ You are not the intended recipient for this product");
-        return;
-      }
-      if (currentState !== 1) {
-        setStatusMessage("❌ Product state is not 'Shipped' (State 1)");
-        return;
-      }
-
-      try {
-        await contractInstance.receiveProduct.staticCall(productIdBigInt);
-      } catch (staticErr: any) {
-        setStatusMessage(getFriendlyRevertMessage(staticErr));
-        return;
-      }
-
-      const tx = await contractInstance.receiveProduct(productIdBigInt, { gasLimit: 150000 });
-      setStatusMessage(`Pending: ส่งธุรกรรมแล้ว (${tx.hash})... รอการยืนยัน`);
-
-      await tx.wait();
-      setStatusMessage("Success: รับสินค้าเรียบร้อยแล้ว (ยืนยันธุรกรรมแล้ว)");
-      setSearchId(raw);
-      setTrackerRefreshToken((prev) => prev + 1);
-      setProductId("");
-    } catch (err: any) {
-      setStatusMessage(getFriendlyRevertMessage(err));
-    } finally {
-      setIsReceiving(false);
     }
   };
 
@@ -227,41 +130,56 @@ export default function ReceiverPage() {
     return `${addr.slice(0, 6)}...${addr.slice(-4)}`;
   };
 
-  const handleCheckIn = () => {
-    if (!walletAddress) return alert("กรุณาต่อ Wallet ก่อน");
-    setIsFetchingGps(true);
-    
-    // ดึงพิกัด Shipper ทันทีแบบไม่ใช้ GPS ดาวเทียม (แก้พิกัดให้ตรงกับหน้า Shipper)
-    setCoords({ 
-      lat: 14.972700, 
-      lng: 102.099300 
-    });
-    
-    setIsFetchingGps(false);
+  const handleShipSuccess = (shippedProductId: string) => {
+    setSearchId(shippedProductId);
+    setTrackerRefreshToken((prev) => prev + 1);
   };
 
-  const isErrorStatus = statusMessage.includes("❌") || statusMessage.includes("เชื่อมต่อไม่สำเร็จ") || statusMessage.includes("⚠");
-  const isSuccessStatus = statusMessage.includes("Success") || (statusMessage.includes("สำเร็จ") && !statusMessage.includes("ไม่สำเร็จ"));
+  const handleCheckIn = () => {
+    if (!walletAddress) return alert("กรุณาเชื่อมต่อ Wallet ก่อนทำการเช็คอินพิกัด");
+    setIsFetchingGps(true);
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          setCoords({ lat: pos.coords.latitude, lng: pos.coords.longitude });
+          setIsFetchingGps(false);
+        },
+        (err) => { 
+          alert(`ไม่สามารถดึงตำแหน่งได้: ${err.message}`); 
+          setIsFetchingGps(false); 
+        },
+        { enableHighAccuracy: true }
+      );
+    } else {
+      alert("เบราว์เซอร์ของคุณไม่รองรับการดึงพิกัด GPS");
+      setIsFetchingGps(false);
+    }
+  };
+
+  // Helper เพื่อเช็คสถานะสำหรับทำสี Banner
+  const isErrorStatus = statusMessage.includes("ข้อผิดพลาด") || statusMessage.includes("กรุณาเปลี่ยน") || statusMessage.includes("ไม่พบ");
+  const isSuccessStatus = statusMessage.includes("เชื่อมต่อสำเร็จ");
 
   return (
     <div className="min-h-screen bg-[#F4F7FE] text-slate-800 dark:bg-slate-950 dark:text-slate-100 font-sans">
       
+      {/* Navigation Bar */}
       <nav className="sticky top-0 z-50 border-b border-slate-200/50 bg-white/70 backdrop-blur-xl dark:border-slate-800/60 dark:bg-slate-950/80">
         <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
           <div className="flex h-16 items-center justify-between">
             <div className="flex items-center gap-3">
-              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-tr from-emerald-500 to-teal-400 text-white shadow-md shadow-emerald-200 dark:shadow-none">
-                <span className="text-xl font-bold">R</span>
+              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-tr from-indigo-600 to-blue-500 text-white shadow-md shadow-indigo-200 dark:shadow-none">
+                <span className="text-xl font-bold">S</span>
               </div>
-              <span className="text-xl font-extrabold tracking-tight">Receiver<span className="text-emerald-500 dark:text-emerald-400">Hub</span></span>
+              <span className="text-xl font-extrabold tracking-tight">Shipper<span className="text-indigo-600 dark:text-indigo-400">Hub</span></span>
             </div>
 
             <div className="flex items-center gap-3">
               <Link 
-                href="/shipper" 
+                href="/" 
                 className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white/50 px-4 py-2.5 text-sm font-semibold text-slate-600 shadow-sm transition hover:bg-slate-50 hover:shadow dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800"
               >
-                <span>🚚</span> ไปหน้าผู้ส่ง (Shipper)
+                <span>📦</span> ไปหน้าผู้รับ (Receiver)
               </Link>
             </div>
           </div>
@@ -270,17 +188,18 @@ export default function ReceiverPage() {
 
       <main className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:py-10">
         
+        {/* Header Section */}
         <div className="mb-8 flex flex-col items-start justify-between gap-6 rounded-3xl bg-white p-8 shadow-sm dark:bg-slate-900 md:flex-row md:items-center">
           <div>
-            <h1 className="text-3xl font-extrabold tracking-tight text-slate-900 dark:text-white sm:text-4xl">Receiver Dashboard</h1>
-            <p className="mt-2 text-slate-500 dark:text-slate-400">ระบบตรวจสอบและยืนยันการรับสินค้าผ่านเทคโนโลยีบล็อกเชน</p>
+            <h1 className="text-3xl font-extrabold tracking-tight text-slate-900 dark:text-white sm:text-4xl">Shipper Dashboard</h1>
+            <p className="mt-2 text-slate-500 dark:text-slate-400">ระบบจัดการและบันทึกข้อมูลการขนส่งสินค้าลงบนบล็อกเชน</p>
           </div>
 
           {!walletAddress ? (
             <button 
               onClick={connectWallet}
               disabled={isConnecting}
-              className="group inline-flex items-center justify-center gap-2 rounded-2xl bg-slate-900 px-8 py-4 text-sm font-bold text-white shadow-lg shadow-slate-300 transition-all hover:bg-slate-800 hover:-translate-y-0.5 active:scale-95 dark:bg-emerald-600 dark:shadow-none dark:hover:bg-emerald-500 disabled:opacity-70"
+              className="group inline-flex items-center justify-center gap-2 rounded-2xl bg-slate-900 px-8 py-4 text-sm font-bold text-white shadow-lg shadow-slate-300 transition-all hover:bg-slate-800 hover:-translate-y-0.5 active:scale-95 dark:bg-indigo-600 dark:shadow-none dark:hover:bg-indigo-500 disabled:opacity-70"
             >
               {isConnecting ? (
                 <>
@@ -294,17 +213,18 @@ export default function ReceiverPage() {
             </button>
           ) : (
             <div className="flex items-center gap-4 rounded-2xl border border-slate-100 bg-slate-50 p-2 pr-5 dark:border-slate-800 dark:bg-slate-950">
-              <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-emerald-100 text-xl dark:bg-emerald-900/40">
-                🏠
+              <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-indigo-100 text-xl dark:bg-indigo-900/40">
+                🧑‍🚀
               </div>
               <div className="flex flex-col">
                 <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Connected Wallet</span>
-                <span className="font-mono text-base font-semibold text-emerald-600 dark:text-emerald-400">{truncateAddress(walletAddress)}</span>
+                <span className="font-mono text-base font-semibold text-indigo-600 dark:text-indigo-400">{truncateAddress(walletAddress)}</span>
               </div>
             </div>
           )}
         </div>
 
+        {/* Status Notification */}
         <div className={`mb-8 flex items-center gap-3 rounded-2xl border p-4 shadow-sm transition-all ${
           isSuccessStatus
             ? "border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-900/50 dark:bg-emerald-900/20 dark:text-emerald-400"
@@ -322,86 +242,52 @@ export default function ReceiverPage() {
           <p className="text-sm font-medium">{statusMessage}</p>
         </div>
 
+        {/* Main Grid Content */}
         <div className="grid grid-cols-1 gap-8 lg:grid-cols-12">
           
+          {/* Left Side: Shipping Form */}
           <div className="space-y-8 lg:col-span-7">
             <div className="overflow-hidden rounded-3xl bg-white shadow-sm ring-1 ring-slate-200 dark:bg-slate-900 dark:ring-slate-800">
               <div className="border-b border-slate-100 bg-slate-50/50 px-8 py-6 dark:border-slate-800 dark:bg-slate-800/20">
                 <h2 className="flex items-center gap-3 text-lg font-bold text-slate-800 dark:text-slate-200">
-                  <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-100 text-emerald-600 dark:bg-emerald-900/50 dark:text-emerald-400">📥</span>
-                  ยืนยันการรับสินค้า (Receive Product)
+                  <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-indigo-100 text-indigo-600 dark:bg-indigo-900/50 dark:text-indigo-400">📦</span>
+                  ฟอร์มจัดส่งสินค้า (Ship Product)
                 </h2>
-                <p className="mt-1 text-sm text-slate-500">กรอกหมายเลข Product ID ที่ผู้ส่งกำหนดให้คุณเพื่อรับสินค้า</p>
+                <p className="mt-1 text-sm text-slate-500">กรอกรายละเอียดเพื่อบันทึกสถานะการจัดส่งลงบน Smart Contract</p>
               </div>
               <div className="p-8">
-                
-                <div className="space-y-6">
-                  <div className="space-y-2">
-                    <label htmlFor="productId" className="block text-sm font-bold text-slate-700 dark:text-slate-300">
-                      Product ID (หมายเลขสินค้า)
-                    </label>
-                    <input 
-                      id="productId" 
-                      type="text"
-                      inputMode="numeric" 
-                      pattern="[0-9]*" 
-                      placeholder="เช่น 1, 2, 3" 
-                      value={productId} 
-                      onChange={(e) => setProductId(e.target.value)} 
-                      className="block w-full rounded-2xl border border-slate-200 bg-slate-50 px-5 py-4 text-slate-900 transition-all focus:border-emerald-500 focus:bg-white focus:outline-none focus:ring-4 focus:ring-emerald-500/10 dark:border-slate-700 dark:bg-slate-950 dark:text-white dark:focus:border-emerald-500 dark:focus:ring-emerald-500/20" 
-                    />
-                  </div>
-
-                  <div className="flex gap-3 pt-4">
-                    <button 
-                      type="button" 
-                      disabled={!canReceive} 
-                      onClick={receiveProduct} 
-                      className="group flex flex-1 items-center justify-center gap-2 rounded-2xl bg-slate-900 px-6 py-4 font-bold text-white transition-all hover:bg-slate-800 active:scale-[0.98] disabled:opacity-50 dark:bg-emerald-600 dark:hover:bg-emerald-500"
-                    >
-                      {isReceiving ? (
-                        <>
-                          <svg className="h-5 w-5 animate-spin text-white" viewBox="0 0 24 24">
-                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none"></circle>
-                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                          </svg>
-                          กำลังประมวลผลธุรกรรม...
-                        </>
-                      ) : "✓ ยืนยันรับสินค้า"}
-                    </button>
-                    
-                    <button 
-                      type="button" 
-                      onClick={() => { setProductId(""); setStatusMessage("ล้างค่า Product ID แล้ว"); }} 
-                      disabled={isReceiving || isConnecting} 
-                      className="rounded-2xl border border-slate-200 bg-white px-6 py-4 font-bold text-slate-600 transition-all hover:bg-slate-50 active:scale-[0.98] disabled:opacity-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700"
-                    >
-                      ล้างข้อมูล
-                    </button>
-                  </div>
-                </div>
-
+                <ShipProductCard 
+                  contractInstance={contractInstance} 
+                  walletAddress={walletAddress} 
+                  chainId={chainId} 
+                  sepoliaChainId={SEPOLIA_CHAIN_ID} 
+                  onStatus={setStatusMessage} 
+                  onShipSuccess={handleShipSuccess} 
+                />
               </div>
             </div>
           </div>
 
+          {/* Right Side: GPS & Info */}
           <div className="space-y-6 lg:col-span-5">
             
+            {/* Smart Contract Info Box */}
             <div className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-slate-900 to-slate-800 p-8 text-white shadow-lg dark:from-slate-800 dark:to-slate-900">
-              <div className="absolute -right-6 -top-6 h-24 w-24 rounded-full bg-emerald-500/20 blur-2xl"></div>
+              <div className="absolute -right-6 -top-6 h-24 w-24 rounded-full bg-indigo-500/20 blur-2xl"></div>
               <h4 className="mb-1 text-sm font-bold text-slate-300 uppercase tracking-wider">Smart Contract</h4>
-              <p className="font-mono text-sm break-all text-emerald-300">{CONTRACT_ADDRESS}</p>
+              <p className="font-mono text-sm break-all text-indigo-300">{CONTRACT_ADDRESS}</p>
               <div className="mt-5 flex items-center gap-2">
                 <div className="h-2.5 w-2.5 animate-pulse rounded-full bg-emerald-400"></div>
                 <p className="text-xs font-medium text-slate-300">Sepolia Network Ready</p>
               </div>
             </div>
 
+            {/* GPS Tracker Card */}
             <div className="rounded-3xl bg-white p-8 shadow-sm ring-1 ring-slate-200 dark:bg-slate-900 dark:ring-slate-800">
               <div className="mb-6 flex items-center justify-between">
                 <div>
-                  <h3 className="text-lg font-bold text-slate-800 dark:text-slate-200">📍 พิกัดต้นทาง (Shipper)</h3>
-                  <p className="text-xs text-slate-500 mt-1">ตำแหน่งของผู้จัดส่งสินค้า</p>
+                  <h3 className="text-lg font-bold text-slate-800 dark:text-slate-200">📍 พิกัดการจัดส่ง</h3>
+                  <p className="text-xs text-slate-500 mt-1">อัปเดตตำแหน่งปัจจุบันของคุณ</p>
                 </div>
                 {coords && (
                   <span className="flex items-center gap-1.5 rounded-full bg-emerald-50 px-3 py-1 text-xs font-bold text-emerald-600 ring-1 ring-emerald-200 dark:bg-emerald-900/30 dark:ring-emerald-800/50">
@@ -414,7 +300,7 @@ export default function ReceiverPage() {
               <button 
                 onClick={handleCheckIn} 
                 disabled={isFetchingGps || !walletAddress} 
-                className="group flex w-full items-center justify-center gap-2 rounded-2xl bg-emerald-50 py-4 font-bold text-emerald-700 transition-all hover:bg-emerald-100 active:scale-[0.98] disabled:opacity-50 dark:bg-emerald-900/30 dark:text-emerald-400 dark:hover:bg-emerald-900/50"
+                className="group flex w-full items-center justify-center gap-2 rounded-2xl bg-indigo-50 py-4 font-bold text-indigo-700 transition-all hover:bg-indigo-100 active:scale-[0.98] disabled:opacity-50 dark:bg-indigo-900/30 dark:text-indigo-400 dark:hover:bg-indigo-900/50"
               >
                 {isFetchingGps ? (
                   <>
@@ -425,7 +311,7 @@ export default function ReceiverPage() {
                     กำลังระบุพิกัด...
                   </>
                 ) : (
-                  <>🎯 ดึงตำแหน่ง Shipper</>
+                  <>🎯 เช็คอินตำแหน่งปัจจุบัน</>
                 )}
               </button>
 
@@ -451,7 +337,7 @@ export default function ReceiverPage() {
                   <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-white shadow-sm dark:bg-slate-800">
                     <span className="text-xl">📡</span>
                   </div>
-                  <p className="max-w-[200px] text-sm text-slate-500 dark:text-slate-400">กดปุ่มด้านบนเพื่อดึงพิกัดของ Shipper</p>
+                  <p className="max-w-[200px] text-sm text-slate-500 dark:text-slate-400">กดปุ่มด้านบนเพื่อดึงพิกัด GPS ของคุณเข้าสู่ระบบ</p>
                 </div>
               )}
             </div>
@@ -459,10 +345,11 @@ export default function ReceiverPage() {
           </div>
         </div>
 
+        {/* Explorer Section */}
         <div className="mt-10 overflow-hidden rounded-3xl bg-white shadow-sm ring-1 ring-slate-200 dark:bg-slate-900 dark:ring-slate-800">
           <div className="border-b border-slate-100 bg-slate-50/50 px-8 py-6 dark:border-slate-800 dark:bg-slate-800/20">
             <h2 className="flex items-center gap-3 text-lg font-bold text-slate-800 dark:text-slate-200">
-              <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-100 text-blue-600 dark:bg-blue-900/50 dark:text-blue-400">🔍</span>
+              <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-100 text-emerald-600 dark:bg-emerald-900/50 dark:text-emerald-400">🔍</span>
               ประวัติและการติดตาม (History & Tracking)
             </h2>
           </div>
@@ -479,7 +366,7 @@ export default function ReceiverPage() {
       </main>
 
       <footer className="mt-12 border-t border-slate-200/60 bg-white/50 py-8 text-center text-sm font-medium text-slate-400 dark:border-slate-800/60 dark:bg-slate-950/50">
-        <p>© 2026 SupplyChain dApp - Receiver Terminal</p>
+        <p>© 2026 SupplyChain dApp - Shipper Terminal</p>
       </footer>
     </div>
   );
