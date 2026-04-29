@@ -2,7 +2,7 @@ import { ethers } from "ethers";
 
 /** Sepolia — ใช้เมื่อไม่ตั้ง `NEXT_PUBLIC_CONTRACT_ADDRESS` ใน `.env.local` */
 const FALLBACK_CONTRACT_RAW =
-  "0x3e0b592ffe7206198f0d0ad63f80e8515b3c0bae";
+  "0x3a6C062e5341ab2953a6224bb4ab34f5Aa2FDFD4";
 
 /**
  * ที่อยู่คอนแทรค Sepolia แบบ checksum — ป้องกันสลับเชน/พิมพ์ผิดโดยไม่รู้ตัว

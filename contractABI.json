@@ -1,9 +1,7 @@
 [
   {
-    "type": "function",
-    "name": "receiveProduct",
-    "inputs": [{ "name": "_productId", "type": "uint256" }],
-    "outputs": [],
+    "type": "constructor",
+    "inputs": [],
     "stateMutability": "nonpayable"
   },
   {
@@ -15,33 +13,9 @@
   },
   {
     "type": "function",
-    "name": "shipProduct",
-    "inputs": [
-      { "name": "_productId", "type": "uint256" },
-      { "name": "_receiver", "type": "address" }
-    ],
-    "outputs": [],
-    "stateMutability": "nonpayable"
-  },
-  {
-    "type": "function",
-    "name": "recallProduct",
-    "inputs": [{ "name": "_id", "type": "uint256" }],
-    "outputs": [],
-    "stateMutability": "nonpayable"
-  },
-  {
-    "type": "function",
-    "name": "products",
-    "inputs": [{ "name": "pId", "type": "uint256" }],
-    "outputs": [
-      { "name": "id", "type": "uint256" },
-      { "name": "name", "type": "string" },
-      { "name": "owner", "type": "address" },
-      { "name": "state", "type": "uint8" },
-      { "name": "timestamp", "type": "uint256" },
-      { "name": "creator", "type": "address" }
-    ],
+    "name": "manager",
+    "inputs": [],
+    "outputs": [{ "name": "", "type": "address" }],
     "stateMutability": "view"
   },
   {
@@ -52,12 +26,114 @@
     "stateMutability": "view"
   },
   {
+    "type": "function",
+    "name": "products",
+    "inputs": [{ "name": "", "type": "uint256" }],
+    "outputs": [
+      { "name": "id", "type": "uint256" },
+      { "name": "name", "type": "string" },
+      { "name": "owner", "type": "address" },
+      { "name": "state", "type": "uint8" },
+      { "name": "timestamp", "type": "uint256" },
+      { "name": "creator", "type": "address" },
+      { "name": "shipperLat", "type": "int256" },
+      { "name": "shipperLng", "type": "int256" },
+      { "name": "receiverLat", "type": "int256" },
+      { "name": "receiverLng", "type": "int256" }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "recallProduct",
+    "inputs": [{ "name": "_id", "type": "uint256" }],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "receiveProduct",
+    "inputs": [{ "name": "_id", "type": "uint256" }],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "shipProduct",
+    "inputs": [
+      { "name": "_id", "type": "uint256" },
+      { "name": "_newOwner", "type": "address" }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "transferManager",
+    "inputs": [{ "name": "_newManager", "type": "address" }],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "updateReceiverLocation",
+    "inputs": [
+      { "name": "_id", "type": "uint256" },
+      { "name": "_lat", "type": "int256" },
+      { "name": "_lng", "type": "int256" }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "updateShipperLocation",
+    "inputs": [
+      { "name": "_id", "type": "uint256" },
+      { "name": "_lat", "type": "int256" },
+      { "name": "_lng", "type": "int256" }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "event",
+    "name": "ProductCreated",
+    "inputs": [
+      { "name": "id", "type": "uint256", "indexed": true },
+      { "name": "name", "type": "string", "indexed": false },
+      { "name": "owner", "type": "address", "indexed": true },
+      { "name": "timestamp", "type": "uint256", "indexed": false }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "ProductReceived",
+    "inputs": [
+      { "name": "id", "type": "uint256", "indexed": true },
+      { "name": "receiver", "type": "address", "indexed": true },
+      { "name": "timestamp", "type": "uint256", "indexed": false }
+    ],
+    "anonymous": false
+  },
+  {
+    "type": "event",
+    "name": "ProductRecalled",
+    "inputs": [
+      { "name": "id", "type": "uint256", "indexed": true },
+      { "name": "by", "type": "address", "indexed": true }
+    ],
+    "anonymous": false
+  },
+  {
     "type": "event",
     "name": "ProductShipped",
     "inputs": [
       { "name": "id", "type": "uint256", "indexed": true },
       { "name": "from", "type": "address", "indexed": true },
-      { "name": "to", "type": "address", "indexed": true }
+      { "name": "to", "type": "address", "indexed": true },
+      { "name": "timestamp", "type": "uint256", "indexed": false }
     ],
     "anonymous": false
   }

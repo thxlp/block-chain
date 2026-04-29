@@ -21,6 +21,7 @@ import { getInjectedEthereum } from "../../lib/injected-ethereum";
 /** Sepolia — อ่าน on-chain ผ่าน injected provider (หลีกเลี่ยง CORS ของ public RPC URL) */
 const SEPOLIA_CHAIN_ID = BigInt(11155111);
 
+// 🛠️ ส่วนที่ 1: เพิ่ม GPS ลงใน Type
 export type ProductOnchain = {
   id: bigint;
   name: string;
@@ -28,6 +29,10 @@ export type ProductOnchain = {
   state: number;
   timestamp: bigint;
   creator: string;
+  shipperLat: bigint;
+  shipperLng: bigint;
+  receiverLat: bigint;
+  receiverLng: bigint;
 };
 
 type Props = {
@@ -234,7 +239,7 @@ export function ProductStatus({
       console.log(
         "[ProductStatus] read path: new ethers.BrowserProvider(window.ethereum) — productCount/products ใช้ provider ตัวนี้"
       );
-
+      
       const { chainId } = await provider.getNetwork();
       console.log("Current Chain ID:", chainId.toString());
       if (chainId !== SEPOLIA_CHAIN_ID) {
@@ -245,100 +250,18 @@ export function ProductStatus({
         return;
       }
 
-      try {
-        const hex = await provider.send("eth_chainId", []);
-        console.log(
-          "eth_chainId:",
-          BigInt(hex).toString(),
-          "| expected Sepolia:",
-          SEPOLIA_CHAIN_ID.toString()
-        );
-      } catch {
-        // ignore
-      }
-
-      if (!ethers.isAddress(contractAddress)) {
-        setFetchError(
-          `ที่อยู่คอนแทรคไม่ถูกต้อง: "${contractAddress}" ไม่ใช่ Ethereum address ที่รับได้`
-        );
+      const deployedCode = await provider.getCode(checksummedAddress);
+      if (typeof deployedCode !== "string" || deployedCode.length <= 2 || deployedCode === "0x") {
+        setFetchError("ที่อยู่นี้ไม่มี Smart Contract บน Sepolia");
         setLoading(false);
         return;
-      }
-      console.log("Contract Address used:", checksummedAddress);
-
-      /** คืนค่าว่างจาก eth_call → BAD_DATA ที่ productCount — กันไว้ด้วยข้อความชัด */
-      const deployedCode = await provider.getCode(checksummedAddress);
-      const hasBytecode =
-        typeof deployedCode === "string" &&
-        deployedCode.length > 2 &&
-        deployedCode !== "0x";
-      console.log(
-        "[ProductStatus] getCode length:",
-        deployedCode?.length ?? 0,
-        "head:",
-        deployedCode?.slice(0, 18) ?? "(none)"
-      );
-      if (!hasBytecode) {
-        setFetchError(
-          `ที่อยู่นี้ไม่มี Smart Contract บน Sepolia\n\ngetCode("${checksummedAddress}") ได้ค่าว่าง (ไม่มี bytecode)\n\n` +
-            `เมื่อเรียก productCount() RPC จะคืนผลเป็น 0x — ethers จึงแจ้ง BAD_DATA / could not decode result data\n\n` +
-            `แก้ไข: ตั้ง NEXT_PUBLIC_CONTRACT_ADDRESS หรือ fallback ใน lib/sepolia-contract.ts ให้ตรงกับที่ deploy บน Sepolia`
-        );
-        return;
-      }
-
-      {
-        const { chainId: chainIdBeforeCount } = await provider.getNetwork();
-        console.log("Current Chain ID:", chainIdBeforeCount.toString());
-        if (chainIdBeforeCount !== SEPOLIA_CHAIN_ID) {
-          setNetworkHint(
-            "กรุณาสลับเป็น Sepolia ใน MetaMask (chain ID ต้องเป็น 11155111)"
-          );
-          setLoading(false);
-          return;
-        }
       }
 
       const readIface = new ethers.Interface(abi as ethers.InterfaceAbi);
-      const productCountFn = readIface.getFunction("productCount");
-      if (!productCountFn) {
-        setFetchError("ABI ไม่มีฟังก์ชัน productCount() — ตรวจ contractABI.json");
-        setLoading(false);
-        return;
-      }
-      console.log("[ProductStatus] productCount() selector:", productCountFn.selector);
-
       const countCalldata = readIface.encodeFunctionData("productCount", []);
-      const countHex = await provider.call({
-        to: checksummedAddress,
-        data: countCalldata,
-      });
-      console.log(
-        "[ProductStatus] eth_call productCount raw:",
-        countHex,
-        "byteLen:",
-        Math.max(0, (countHex.length - 2) / 2)
-      );
-
-      const expectUint256Bytes = 32;
-      const countBytes = Math.max(0, (countHex.length - 2) / 2);
-      if (
-        !countHex ||
-        countHex === "0x" ||
-        countBytes < expectUint256Bytes
-      ) {
-        setFetchError(
-          `eth_call ของ productCount() ได้ผล "${countHex}" (ว่างหรือสั้นกว่า uint256)\n\n` +
-            `ที่อยู่ที่ใช้: ${checksummedAddress}\n` +
-            `สาเหตุที่พบบ่อย:\n` +
-            `• คนละคอนแทรคกับใน Remix — เช็กตัวกลางที่อยู่ …80a8515… กับ …80e8515… ทีละตัว\n` +
-            `• ABI ในโปรเจกต์ไม่ตรงกับคอนแทรคที่ deploy (ชื่อ/พารามิเตอร์ต่าง → selector ต่าง)\n` +
-            `• คอนแทรคจริงไม่มีฟังก์ชัน productCount() แบบใน ABI\n\n` +
-            `ตรวจโค้ดบน Sepolia: https://sepolia.etherscan.io/address/${checksummedAddress}#code`
-        );
-        setLoading(false);
-        return;
-      }
+      
+      console.log("[ProductStatus] eth_call productCount raw...");
+      const countHex = await provider.call({ to: checksummedAddress, data: countCalldata });
 
       let count: bigint;
       try {
@@ -346,67 +269,35 @@ export function ProductStatus({
         count = asChainUInt256(decoded[0]);
       } catch (decErr) {
         logFullContractError("ProductStatus.productCount.decode", decErr);
-        setFetchError(
-          `decode productCount ล้มเหลว (raw hex ยาว ${countHex.length} ตัวอักษร) — ABI output อาจไม่ตรงกับคอนแทรคจริง\n\nดู Console`
-        );
+        setFetchError(`decode productCount ล้มเหลว`);
         setLoading(false);
         return;
       }
 
-      console.log(
-        "[ProductStatus] productCount (decoded):",
-        count.toString(),
-        "contract:",
-        checksummedAddress
-      );
-
       if (productIdBigInt < BigInt(1) || productIdBigInt > count) {
-        console.log(
-          "[ProductStatus] id out of range:",
-          productIdBigInt.toString(),
-          "count:",
-          count.toString()
-        );
         setNotFound(true);
         setLoading(false);
         return;
       }
 
-      /** products(uint256) — eth_call ดิบก่อน decode เหมือน productCount */
-      const productsCalldata = readIface.encodeFunctionData("products", [
-        productIdBigInt,
-      ]);
-      const productsHex = await provider.call({
-        to: checksummedAddress,
-        data: productsCalldata,
-      });
-      console.log(
-        "[ProductStatus] eth_call products raw byteLen:",
-        Math.max(0, (productsHex.length - 2) / 2)
-      );
+      const productsCalldata = readIface.encodeFunctionData("products", [productIdBigInt]);
+      const productsHex = await provider.call({ to: checksummedAddress, data: productsCalldata });
+
       if (!productsHex || productsHex === "0x") {
-        setFetchError(
-          `eth_call products(${productIdBigInt.toString()}) ได้ผลว่าง (0x)\n\nที่อยู่: ${checksummedAddress}\nดู Console และ Etherscan ว่าฟังก์ชัน/ABI ตรงกันหรือไม่`
-        );
+        setFetchError(`eth_call products(${productIdBigInt.toString()}) ได้ผลว่าง (0x)`);
         setLoading(false);
         return;
       }
 
       let row: ethers.Result;
       try {
-        row = readIface.decodeFunctionResult(
-          "products",
-          productsHex
-        ) as ethers.Result;
+        row = readIface.decodeFunctionResult("products", productsHex) as ethers.Result;
       } catch (decErr) {
         logFullContractError("ProductStatus.products.decode", decErr);
-        setFetchError(
-          `decode products() ล้มเหลว — ABI tuple อาจไม่ตรงกับคอนแทรคจริง\n\nดู Console`
-        );
+        setFetchError(`decode products() ล้มเหลว — ABI tuple อาจไม่ตรงกับคอนแทรคจริง`);
         setLoading(false);
         return;
       }
-      console.log("Raw Data from Contract (decoded tuple):", row);
 
       const idRaw = row[0] ?? row.id;
       const nameRaw = row[1] ?? row.name;
@@ -414,17 +305,28 @@ export function ProductStatus({
       const stateRaw = row[3] ?? row.state;
       const tsRaw = row[4] ?? row.timestamp;
       const creatorRaw = row[5] ?? row.creator;
+      // 🛠️ ส่วนที่ 2: ดึงข้อมูล GPS จากตัวแปร row ของ Contract ตัวใหม่
+      const shipperLatRaw = row[6] ?? row.shipperLat;
+      const shipperLngRaw = row[7] ?? row.shipperLng;
+      const receiverLatRaw = row[8] ?? row.receiverLat;
+      const receiverLngRaw = row[9] ?? row.receiverLng;
 
+      // 🛠️ ส่วนที่ 3: เช็คเงื่อนไขว่าส่งกลับมาครบ 10 ช่องหรือไม่
       const missingSlot =
         idRaw === undefined ||
         nameRaw === undefined ||
         ownerRaw === undefined ||
         stateRaw === undefined ||
         tsRaw === undefined ||
-        creatorRaw === undefined;
+        creatorRaw === undefined ||
+        shipperLatRaw === undefined ||
+        shipperLngRaw === undefined ||
+        receiverLatRaw === undefined ||
+        receiverLngRaw === undefined;
+
       if (missingSlot) {
         console.error(
-          "[ProductStatus] tuple incomplete — expected 6 slots (id,name,owner,state,timestamp,creator)"
+          "[ProductStatus] tuple incomplete — expected 10 slots (id,name,owner,state,timestamp,creator,shipperLat,shipperLng,receiverLat,receiverLng)"
         );
         setNotFound(true);
         setLoading(false);
@@ -433,13 +335,6 @@ export function ProductStatus({
 
       const id = asChainUInt256(idRaw);
       if (id !== productIdBigInt) {
-        console.warn(
-          "[ProductStatus] id mismatch on-chain:",
-          id.toString(),
-          "expected:",
-          productIdBigInt.toString(),
-          "(both normalized as BigInt)"
-        );
         setNotFound(true);
         setLoading(false);
         return;
@@ -447,12 +342,12 @@ export function ProductStatus({
 
       const name = String(nameRaw).trim();
       if (!name) {
-        console.warn("[ProductStatus] empty product name — treating as not found");
         setNotFound(true);
         setLoading(false);
         return;
       }
 
+      // 🛠️ ส่วนที่ 4: ยัดข้อมูลลง Object
       const data: ProductOnchain = {
         id,
         name,
@@ -460,24 +355,18 @@ export function ProductStatus({
         state: Number(stateRaw),
         timestamp: asChainUInt256(tsRaw),
         creator: ethers.getAddress(String(creatorRaw)),
+        shipperLat: asChainUInt256(shipperLatRaw),
+        shipperLng: asChainUInt256(shipperLngRaw),
+        receiverLat: asChainUInt256(receiverLatRaw),
+        receiverLng: asChainUInt256(receiverLngRaw),
       };
 
       setProductData(data);
       onTrackedProductIdChange?.(searchQuery);
       lastCompletedQueryRef.current = searchQuery;
     } catch (error) {
-      logFullContractError("ProductStatus.runTrack", error);
-      if (error !== null && typeof error === "object") {
-        const ex = error as Record<string, unknown>;
-        console.error("[ProductStatus.runTrack] catch → error.data:", ex.data);
-        console.error(
-          "[ProductStatus.runTrack] catch → error.transaction:",
-          ex.transaction
-        );
-      }
-      setFetchError(
-        `เรียก Smart Contract ไม่สำเร็จ\n\n${summarizeReadError(error)}\n\nรายละเอียดเต็ม: เปิด Console ดูบรรทัด "Full Error Object"`
-      );
+      logFullContractError("ProductStatus.runTrack.catch", error);
+      setFetchError(`เรียก Smart Contract ไม่สำเร็จ\n\n${summarizeReadError(error)}`);
       onTrackedProductIdChange?.(null);
     } finally {
       inFlightQueryRef.current = null;
@@ -509,7 +398,7 @@ export function ProductStatus({
     const q = latestQueryRef.current.trim();
     if (!q) return;
     void runTrack(q, true);
-  }, [refreshToken, runTrack]); // refresh on successful tx in parent
+  }, [refreshToken, runTrack]); 
 
   useEffect(() => {
     const nextSearchId = searchId.trim();
@@ -697,7 +586,6 @@ export function ProductStatus({
                   else if (state === 1) mode = "current";
                   else mode = "pending";
                 } else {
-                  // Step 3 should be marked success immediately when state === 2.
                   if (state >= 2) mode = "done";
                   else mode = "pending";
                 }

@@ -35,24 +35,41 @@ export default function ShipperPage() {
   // GPS State
   const [coords, setCoords] = useState<{ lat: number; lng: number } | null>(null);
   const [isFetchingGps, setIsFetchingGps] = useState(false);
+  const [gpsProductId, setGpsProductId] = useState<string>("");
 
+  // 🛠️ แก้ไข useEffect ให้ Auto-Connect Contract สมบูรณ์
   useEffect(() => {
     const ethereum = getInjectedEthereum();
     if (!ethereum) return;
 
+    const autoInitContract = async () => {
+      try {
+        const provider = new ethers.BrowserProvider(ethereum as any);
+        const signer = await provider.getSigner();
+        const contract = new ethers.Contract(CONTRACT_ADDRESS, abi, signer);
+        setContractInstance(contract);
+      } catch (err) {
+        console.error("Auto init contract failed", err);
+      }
+    };
+
     const updateFromAccounts = async () => {
       try {
         const accounts = (await ethereum.request({ method: "eth_accounts" })) as string[] | undefined;
-        const next = accounts?.[0] ?? null;
-        setWalletAddress(next);
+        if (accounts && accounts.length > 0) {
+          setWalletAddress(accounts[0]);
+          await autoInitContract(); // <-- จุดที่แก้
+        } else {
+          setWalletAddress(null);
+          setContractInstance(null);
+        }
       } catch {}
     };
 
     const updateFromChain = async () => {
       try {
         const id = await ethereum.request({ method: "eth_chainId" });
-        const nextChainId = typeof id === "string" ? parseInt(id, 16) : Number(id);
-        setChainId(nextChainId);
+        setChainId(typeof id === "string" ? parseInt(id, 16) : Number(id));
       } catch {}
     };
 
@@ -60,18 +77,18 @@ export default function ShipperPage() {
     updateFromChain();
 
     const handleAccountsChanged = (accounts: string[]) => {
-      setWalletAddress(accounts?.[0] ?? null);
-      setContractInstance(null);
-      setStatusMessage("ตรวจพบการเปลี่ยนบัญชี กรุณาเชื่อมต่อใหม่");
+      if (accounts && accounts.length > 0) {
+        setWalletAddress(accounts[0]);
+        autoInitContract();
+      } else {
+        setWalletAddress(null);
+        setContractInstance(null);
+      }
     };
 
     const handleChainChanged = (id: string) => {
-      try {
-        const nextChainId = parseInt(id, 16);
-        setChainId(nextChainId);
-      } catch {}
-      setContractInstance(null);
-      setStatusMessage("ตรวจพบการเปลี่ยนเครือข่าย กรุณาเชื่อมต่อใหม่");
+      setChainId(parseInt(id, 16));
+      autoInitContract();
     };
 
     ethereum.on?.("accountsChanged", handleAccountsChanged);
@@ -80,7 +97,7 @@ export default function ShipperPage() {
       ethereum.removeListener?.("accountsChanged", handleAccountsChanged);
       ethereum.removeListener?.("chainChanged", handleChainChanged);
     };
-  }, []);
+  }, [abi]);
 
   const connectWallet = async () => {
     if (typeof window === "undefined") return;
@@ -135,35 +152,75 @@ export default function ShipperPage() {
     setTrackerRefreshToken((prev) => prev + 1);
   };
 
-  const handleCheckIn = () => {
-    if (!walletAddress) return alert("กรุณาเชื่อมต่อ Wallet ก่อนทำการเช็คอินพิกัด");
+  const handleCheckIn = async () => {
+    if (!contractInstance) return alert("กรุณาเชื่อมต่อ Wallet ก่อนทำการเช็คอินพิกัด");
+    if (!gpsProductId.trim()) return alert("กรุณากรอก Product ID ในกล่อง GPS ก่อน");
+
     setIsFetchingGps(true);
-    if (navigator.geolocation) {
-      navigator.geolocation.getCurrentPosition(
-        (pos) => {
-          setCoords({ lat: pos.coords.latitude, lng: pos.coords.longitude });
-          setIsFetchingGps(false);
-        },
-        (err) => { 
-          alert(`ไม่สามารถดึงตำแหน่งได้: ${err.message}`); 
-          setIsFetchingGps(false); 
-        },
-        { enableHighAccuracy: true }
-      );
-    } else {
+    setStatusMessage("กำลังดึง GPS ของคุณ...");
+
+    if (!navigator.geolocation) {
       alert("เบราว์เซอร์ของคุณไม่รองรับการดึงพิกัด GPS");
+      setIsFetchingGps(false);
+      return;
+    }
+
+    navigator.geolocation.getCurrentPosition(async (pos) => {
+      const lat = Math.round(pos.coords.latitude * 1000000);
+      const lng = Math.round(pos.coords.longitude * 1000000);
+
+      try {
+        setStatusMessage("กำลังบันทึกพิกัดคุณลงบล็อกเชน (รอ Confirm)...");
+        const tx = await contractInstance.updateShipperLocation(BigInt(gpsProductId), lat, lng);
+        await tx.wait();
+        
+        setCoords({ lat: pos.coords.latitude, lng: pos.coords.longitude });
+        setStatusMessage("✅ อัปเดตพิกัดลงบล็อกเชนสำเร็จ! ลูกค้าเห็นคุณแล้ว");
+      } catch (err) {
+        console.error(err);
+        setStatusMessage("❌ เกิดข้อผิดพลาดตอนบันทึกพิกัด");
+      } finally {
+        setIsFetchingGps(false);
+      }
+    }, (err) => { 
+      alert(`ไม่สามารถดึงตำแหน่งได้: ${err.message}`); 
+      setIsFetchingGps(false); 
+    }, { enableHighAccuracy: true });
+  };
+
+  const trackReceiver = async () => {
+    if (!contractInstance) return alert("กรุณาต่อ Wallet ก่อน");
+    if (!gpsProductId.trim()) return alert("กรุณากรอก Product ID ก่อนดูตำแหน่งลูกค้า");
+
+    setIsFetchingGps(true);
+    setStatusMessage("กำลังดึงตำแหน่งลูกค้าจากบล็อกเชน...");
+
+    try {
+      const product = await contractInstance.products(BigInt(gpsProductId));
+      const rLat = Number(product[8]); 
+      const rLng = Number(product[9]);
+
+      if (rLat === 0 && rLng === 0) {
+        alert("ลูกค้า (Receiver) ยังไม่ได้เช็คอินพิกัดของสินค้านี้!");
+        setStatusMessage("ไม่พบข้อมูลพิกัดลูกค้า");
+      } else {
+        setCoords({ lat: rLat / 1000000, lng: rLng / 1000000 });
+        setStatusMessage("📍 แสดงพิกัดล่าสุดของลูกค้า (Receiver)");
+      }
+    } catch (err) {
+      console.error(err);
+      setStatusMessage("❌ ค้นหาข้อมูลไม่พบ หรือ Product ID ผิด");
+    } finally {
       setIsFetchingGps(false);
     }
   };
 
-  // Helper เพื่อเช็คสถานะสำหรับทำสี Banner
-  const isErrorStatus = statusMessage.includes("ข้อผิดพลาด") || statusMessage.includes("กรุณาเปลี่ยน") || statusMessage.includes("ไม่พบ");
-  const isSuccessStatus = statusMessage.includes("เชื่อมต่อสำเร็จ");
+  const isErrorStatus = statusMessage.includes("ข้อผิดพลาด") || statusMessage.includes("กรุณาเปลี่ยน") || statusMessage.includes("ไม่พบ") || statusMessage.includes("❌");
+  const isSuccessStatus = statusMessage.includes("สำเร็จ") || statusMessage.includes("✅");
 
   return (
     <div className="min-h-screen bg-[#F4F7FE] text-slate-800 dark:bg-slate-950 dark:text-slate-100 font-sans">
       
-      {/* Navigation Bar */}
       <nav className="sticky top-0 z-50 border-b border-slate-200/50 bg-white/70 backdrop-blur-xl dark:border-slate-800/60 dark:bg-slate-950/80">
         <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
           <div className="flex h-16 items-center justify-between">
@@ -188,7 +245,6 @@ export default function ShipperPage() {
 
       <main className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:py-10">
         
-        {/* Header Section */}
         <div className="mb-8 flex flex-col items-start justify-between gap-6 rounded-3xl bg-white p-8 shadow-sm dark:bg-slate-900 md:flex-row md:items-center">
           <div>
             <h1 className="text-3xl font-extrabold tracking-tight text-slate-900 dark:text-white sm:text-4xl">Shipper Dashboard</h1>
@@ -224,7 +280,6 @@ export default function ShipperPage() {
           )}
         </div>
 
-        {/* Status Notification */}
         <div className={`mb-8 flex items-center gap-3 rounded-2xl border p-4 shadow-sm transition-all ${
           isSuccessStatus
             ? "border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-900/50 dark:bg-emerald-900/20 dark:text-emerald-400"
@@ -242,10 +297,8 @@ export default function ShipperPage() {
           <p className="text-sm font-medium">{statusMessage}</p>
         </div>
 
-        {/* Main Grid Content */}
         <div className="grid grid-cols-1 gap-8 lg:grid-cols-12">
           
-          {/* Left Side: Shipping Form */}
           <div className="space-y-8 lg:col-span-7">
             <div className="overflow-hidden rounded-3xl bg-white shadow-sm ring-1 ring-slate-200 dark:bg-slate-900 dark:ring-slate-800">
               <div className="border-b border-slate-100 bg-slate-50/50 px-8 py-6 dark:border-slate-800 dark:bg-slate-800/20">
@@ -268,10 +321,8 @@ export default function ShipperPage() {
             </div>
           </div>
 
-          {/* Right Side: GPS & Info */}
           <div className="space-y-6 lg:col-span-5">
             
-            {/* Smart Contract Info Box */}
             <div className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-slate-900 to-slate-800 p-8 text-white shadow-lg dark:from-slate-800 dark:to-slate-900">
               <div className="absolute -right-6 -top-6 h-24 w-24 rounded-full bg-indigo-500/20 blur-2xl"></div>
               <h4 className="mb-1 text-sm font-bold text-slate-300 uppercase tracking-wider">Smart Contract</h4>
@@ -282,38 +333,37 @@ export default function ShipperPage() {
               </div>
             </div>
 
-            {/* GPS Tracker Card */}
             <div className="rounded-3xl bg-white p-8 shadow-sm ring-1 ring-slate-200 dark:bg-slate-900 dark:ring-slate-800">
-              <div className="mb-6 flex items-center justify-between">
-                <div>
-                  <h3 className="text-lg font-bold text-slate-800 dark:text-slate-200">📍 พิกัดการจัดส่ง</h3>
-                  <p className="text-xs text-slate-500 mt-1">อัปเดตตำแหน่งปัจจุบันของคุณ</p>
-                </div>
-                {coords && (
-                  <span className="flex items-center gap-1.5 rounded-full bg-emerald-50 px-3 py-1 text-xs font-bold text-emerald-600 ring-1 ring-emerald-200 dark:bg-emerald-900/30 dark:ring-emerald-800/50">
-                    <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse"></span>
-                    LIVE
-                  </span>
-                )}
-              </div>
+              <h3 className="text-lg font-bold text-slate-800 dark:text-slate-200 mb-1">📍 จัดการพิกัด (On-chain)</h3>
+              <p className="text-xs text-slate-500 mb-5">อัปเดตและติดตามตำแหน่งผ่านบล็อกเชน</p>
               
-              <button 
-                onClick={handleCheckIn} 
-                disabled={isFetchingGps || !walletAddress} 
-                className="group flex w-full items-center justify-center gap-2 rounded-2xl bg-indigo-50 py-4 font-bold text-indigo-700 transition-all hover:bg-indigo-100 active:scale-[0.98] disabled:opacity-50 dark:bg-indigo-900/30 dark:text-indigo-400 dark:hover:bg-indigo-900/50"
-              >
-                {isFetchingGps ? (
-                  <>
-                    <svg className="h-5 w-5 animate-spin" viewBox="0 0 24 24">
-                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none"></circle>
-                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                    </svg>
-                    กำลังระบุพิกัด...
-                  </>
-                ) : (
-                  <>🎯 เช็คอินตำแหน่งปัจจุบัน</>
-                )}
-              </button>
+              <div className="mb-4">
+                <input 
+                  type="text" 
+                  placeholder="ใส่ Product ID ที่ต้องการตรวจสอบ/อัปเดต..." 
+                  value={gpsProductId}
+                  onChange={(e) => setGpsProductId(e.target.value)}
+                  className="w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 dark:border-slate-700 dark:bg-slate-950 dark:text-white"
+                />
+              </div>
+
+              <div className="flex flex-col gap-3">
+                <button 
+                  onClick={trackReceiver} 
+                  disabled={isFetchingGps || !walletAddress} 
+                  className="group flex w-full items-center justify-center gap-2 rounded-2xl bg-indigo-50 py-3.5 font-bold text-indigo-700 transition-all hover:bg-indigo-100 active:scale-[0.98] disabled:opacity-50 dark:bg-indigo-900/30 dark:text-indigo-400 dark:hover:bg-indigo-900/50"
+                >
+                  🔍 ดึงพิกัดลูกค้า (Receiver)
+                </button>
+
+                <button 
+                  onClick={handleCheckIn} 
+                  disabled={isFetchingGps || !walletAddress} 
+                  className="group flex w-full items-center justify-center gap-2 rounded-2xl bg-emerald-50 py-3.5 font-bold text-emerald-700 transition-all hover:bg-emerald-100 active:scale-[0.98] disabled:opacity-50 dark:bg-emerald-900/30 dark:text-emerald-400 dark:hover:bg-emerald-900/50"
+                >
+                  {isFetchingGps ? "กำลังดำเนินการ..." : "🎯 อัปเดตพิกัดฉันลงบล็อกเชน"}
+                </button>
+              </div>
 
               {coords ? (
                 <div className="mt-6 animate-in fade-in slide-in-from-bottom-2 duration-500">
@@ -337,7 +387,7 @@ export default function ShipperPage() {
                   <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-white shadow-sm dark:bg-slate-800">
                     <span className="text-xl">📡</span>
                   </div>
-                  <p className="max-w-[200px] text-sm text-slate-500 dark:text-slate-400">กดปุ่มด้านบนเพื่อดึงพิกัด GPS ของคุณเข้าสู่ระบบ</p>
+                  <p className="max-w-[200px] text-sm text-slate-500 dark:text-slate-400">กรอก ID และกดปุ่มเพื่อเริ่มติดตาม GPS</p>
                 </div>
               )}
             </div>
@@ -345,7 +395,6 @@ export default function ShipperPage() {
           </div>
         </div>
 
-        {/* Explorer Section */}
         <div className="mt-10 overflow-hidden rounded-3xl bg-white shadow-sm ring-1 ring-slate-200 dark:bg-slate-900 dark:ring-slate-800">
           <div className="border-b border-slate-100 bg-slate-50/50 px-8 py-6 dark:border-slate-800 dark:bg-slate-800/20">
             <h2 className="flex items-center gap-3 text-lg font-bold text-slate-800 dark:text-slate-200">
