@@ -12,6 +12,16 @@ import contractABI from "../contractABI.json";
 const CONTRACT_ADDRESS = getSepoliaContractAddress();
 const SEPOLIA_CHAIN_ID = 11155111;
 
+// 🛠️ ฟังก์ชันช่วยแปลง Address ให้อยู่ในรูปแบบมาตรฐาน (ป้องกันปัญหาตัวพิมพ์เล็ก-ใหญ่ไม่ตรงกัน)
+function normalizeAddress(input: string | null): string | null {
+  if (!input) return null;
+  try {
+    return ethers.getAddress(input);
+  } catch {
+    return null;
+  }
+}
+
 export default function ReceiverPage() {
   const abi = useMemo(() => contractABI as any[], []);
 
@@ -28,9 +38,24 @@ export default function ReceiverPage() {
   const [coords, setCoords] = useState<{lat: number, lng: number} | null>(null);
   const [isFetchingGps, setIsFetchingGps] = useState(false);
 
-  const canReceive = Boolean(contractInstance && !isReceiving && productId.trim().length > 0);
+  // 🛠️ State ใหม่สำหรับระบบตรวจสอบสิทธิ์
+  const [ownerLookupLoading, setOwnerLookupLoading] = useState(false);
+  const [ownerAddress, setOwnerAddress] = useState<string | null>(null);
+  const [ownerLookupError, setOwnerLookupError] = useState<string | null>(null);
 
-  // 🛠️ แก้ไข useEffect ให้ Auto-Connect Contract สมบูรณ์
+  // 🛠️ คำนวณหาว่า Wallet ที่ต่ออยู่ ตรงกับเจ้าของสินค้าไหม
+  const normalizedWallet = useMemo(() => normalizeAddress(walletAddress), [walletAddress]);
+  const normalizedOwner = useMemo(() => normalizeAddress(ownerAddress), [ownerAddress]);
+  const walletOwnsProduct = normalizedWallet !== null && normalizedWallet === normalizedOwner;
+
+  // 🛠️ เงื่อนไขปุ่มรับสินค้า (ต้องกรอก ID + ไม่ได้โหลดอยู่ + และ "ต้องเป็นเจ้าของ" เท่านั้น)
+  const canReceive = Boolean(
+    contractInstance && 
+    !isReceiving && 
+    productId.trim().length > 0 && 
+    walletOwnsProduct
+  );
+
   useEffect(() => {
     const ethereum = getInjectedEthereum();
     if (!ethereum) return;
@@ -51,7 +76,7 @@ export default function ReceiverPage() {
         const accounts = (await ethereum.request({ method: "eth_accounts" })) as string[] | undefined;
         if (accounts && accounts.length > 0) {
           setWalletAddress(accounts[0]);
-          await autoInitContract(); // <-- จุดที่แก้: สร้างเครื่องยนต์คืนมาทันที
+          await autoInitContract();
         } else {
           setWalletAddress(null);
           setContractInstance(null);
@@ -91,6 +116,53 @@ export default function ReceiverPage() {
       ethereum.removeListener?.("chainChanged", handleChainChanged);
     };
   }, [abi]);
+
+  // 🛠️ Effect สำหรับวิ่งไปเช็ค Owner บน Smart Contract ทันทีที่พิมพ์ Product ID
+  useEffect(() => {
+    const idStr = productId.trim();
+    if (!idStr || !contractInstance) {
+      setOwnerAddress(null);
+      setOwnerLookupError(null);
+      return;
+    }
+
+    let active = true;
+    const checkOwnership = async () => {
+      try {
+        setOwnerLookupLoading(true);
+        setOwnerLookupError(null);
+        setOwnerAddress(null);
+
+        const idBigInt = BigInt(idStr);
+        const row = await contractInstance.products(idBigInt);
+        
+        if (!active) return;
+
+        // ถ้ารหัส ID ไม่มีอยู่จริง (id == 0)
+        if (BigInt(row[0] ?? row.id) === BigInt(0)) {
+          setOwnerLookupError("❌ ไม่พบสินค้านี้ในระบบ");
+          return;
+        }
+
+        // ดึงที่อยู่กระเป๋าเจ้าของมาเก็บไว้ (Index ที่ 2 คือ owner)
+        const ownerRaw = row[2] ?? row.owner;
+        setOwnerAddress(ethers.getAddress(String(ownerRaw)));
+        
+      } catch (err: any) {
+        if (!active) return;
+        console.error("Lookup error:", err);
+        setOwnerLookupError("❌ ไม่สามารถดึงข้อมูลได้ (พิมพ์ ID ให้ถูกต้อง)");
+      } finally {
+        if (active) setOwnerLookupLoading(false);
+      }
+    };
+
+    const t = setTimeout(checkOwnership, 500); // หน่วงเวลา 0.5 วิ ตอนพิมพ์เสร็จ
+    return () => {
+      active = false;
+      clearTimeout(t);
+    };
+  }, [productId, contractInstance]);
 
   const connectWallet = async () => {
     if (typeof window === "undefined") return;
@@ -258,9 +330,33 @@ export default function ReceiverPage() {
                       className="block w-full rounded-2xl border border-slate-200 bg-slate-50 px-5 py-4 focus:ring-4 outline-none dark:bg-slate-950 dark:border-slate-700 dark:focus:ring-emerald-500/20" 
                     />
                   </div>
-                  <div className="flex gap-3 pt-4">
-                    <button onClick={receiveProduct} disabled={!canReceive} className="flex-1 rounded-2xl bg-slate-900 px-6 py-4 font-bold text-white dark:bg-emerald-600 disabled:opacity-50">✓ ยืนยันรับสินค้า</button>
-                    <button onClick={() => setProductId("")} className="rounded-2xl border bg-white px-6 py-4 font-bold dark:bg-slate-800">ล้างค่า</button>
+
+                  {/* 🛠️ กล่องแจ้งเตือนสิทธิ์การรับสินค้า */}
+                  <div className="mt-2 min-h-[24px] text-sm font-medium">
+                    {ownerLookupLoading ? (
+                      <span className="text-slate-400">กำลังตรวจสอบสิทธิ์...</span>
+                    ) : ownerLookupError ? (
+                      <span className="text-rose-500">{ownerLookupError}</span>
+                    ) : normalizedOwner && walletOwnsProduct ? (
+                      <span className="text-emerald-600 dark:text-emerald-400">
+                        ✅ ตรวจสอบสิทธิ์สำเร็จ: คุณคือผู้รับสินค้านี้
+                      </span>
+                    ) : normalizedOwner ? (
+                      <span className="text-rose-500">
+                        ❌ คุณไม่ใช่ผู้รับสินค้านี้ (สิทธิ์เป็นของ {normalizedOwner.slice(0, 6)}...)
+                      </span>
+                    ) : (
+                      <span className="text-slate-500">กรอก Product ID เพื่อตรวจสอบสิทธิ์การรับของ</span>
+                    )}
+                  </div>
+
+                  <div className="flex gap-3 pt-2">
+                    <button onClick={receiveProduct} disabled={!canReceive} className="flex-1 rounded-2xl bg-slate-900 px-6 py-4 font-bold text-white dark:bg-emerald-600 disabled:opacity-50 transition-opacity">
+                      ✓ ยืนยันรับสินค้า
+                    </button>
+                    <button onClick={() => setProductId("")} className="rounded-2xl border bg-white px-6 py-4 font-bold dark:bg-slate-800 transition-colors">
+                      ล้างค่า
+                    </button>
                   </div>
                 </div>
               </div>
@@ -286,7 +382,7 @@ export default function ReceiverPage() {
                 <button 
                   onClick={trackShipper} 
                   disabled={isFetchingGps || !walletAddress} 
-                  className="w-full rounded-2xl bg-blue-50 py-4 font-bold text-blue-700 hover:bg-blue-100 disabled:opacity-50 dark:bg-blue-900/30 dark:text-blue-400"
+                  className="w-full rounded-2xl bg-blue-50 py-4 font-bold text-blue-700 hover:bg-blue-100 disabled:opacity-50 dark:bg-blue-900/30 dark:text-blue-400 transition-colors"
                 >
                   🔍 ดึงตำแหน่งคนส่ง (Shipper) จากบล็อกเชน
                 </button>
@@ -294,7 +390,7 @@ export default function ReceiverPage() {
                 <button 
                   onClick={handleCheckIn} 
                   disabled={isFetchingGps || !walletAddress} 
-                  className="w-full rounded-2xl bg-emerald-50 py-4 font-bold text-emerald-700 hover:bg-emerald-100 disabled:opacity-50 dark:bg-emerald-900/30 dark:text-emerald-400"
+                  className="w-full rounded-2xl bg-emerald-50 py-4 font-bold text-emerald-700 hover:bg-emerald-100 disabled:opacity-50 dark:bg-emerald-900/30 dark:text-emerald-400 transition-colors"
                 >
                   🎯 เช็คอินบอกตำแหน่งฉัน (ให้ Shipper รู้)
                 </button>
@@ -305,6 +401,7 @@ export default function ReceiverPage() {
                   <div className="relative overflow-hidden rounded-2xl border border-slate-200 dark:border-slate-700">
                     <iframe 
                       width="100%" height="220" frameBorder="0"
+                      /* 🛠️ แก้ไข URL Google Maps ที่แตก ให้แสดงผลได้ถูกต้อง */
                       src={`https://maps.google.com/maps?q=${coords.lat},${coords.lng}&hl=th&z=15&output=embed`} 
                       className="block bg-slate-100 dark:bg-slate-800"
                     />
