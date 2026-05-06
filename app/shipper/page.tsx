@@ -19,6 +19,22 @@ import contractABI from "../../contractABI.json";
 const CONTRACT_ADDRESS = getSepoliaContractAddress();
 const SEPOLIA_CHAIN_ID = 11155111;
 
+function isUserRejected(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  if (
+    "code" in error &&
+    (error as { code: unknown }).code === "ACTION_REJECTED"
+  )
+    return true;
+  if (
+    "info" in error &&
+    (error as { info?: { error?: { code?: number } } }).info?.error?.code ===
+      4001
+  )
+    return true;
+  return false;
+}
+
 export default function ShipperPage() {
   const abi = useMemo(() => {
     return contractABI as any[];
@@ -37,7 +53,6 @@ export default function ShipperPage() {
   const [isFetchingGps, setIsFetchingGps] = useState(false);
   const [gpsProductId, setGpsProductId] = useState<string>("");
 
-  // 🛠️ แก้ไข useEffect ให้ Auto-Connect Contract สมบูรณ์
   useEffect(() => {
     const ethereum = getInjectedEthereum();
     if (!ethereum) return;
@@ -58,7 +73,7 @@ export default function ShipperPage() {
         const accounts = (await ethereum.request({ method: "eth_accounts" })) as string[] | undefined;
         if (accounts && accounts.length > 0) {
           setWalletAddress(accounts[0]);
-          await autoInitContract(); // <-- จุดที่แก้
+          await autoInitContract();
         } else {
           setWalletAddress(null);
           setContractInstance(null);
@@ -130,7 +145,7 @@ export default function ShipperPage() {
       const contract = new ethers.Contract(CONTRACT_ADDRESS, abi, signer);
       setWalletAddress(address);
       setContractInstance(contract);
-      
+
       setStatusMessage(
         Number(network.chainId) === SEPOLIA_CHAIN_ID
           ? "เชื่อมต่อสำเร็จ พร้อมส่งสินค้า"
@@ -173,18 +188,22 @@ export default function ShipperPage() {
         setStatusMessage("กำลังบันทึกพิกัดคุณลงบล็อกเชน (รอ Confirm)...");
         const tx = await contractInstance.updateShipperLocation(BigInt(gpsProductId), lat, lng);
         await tx.wait();
-        
+
         setCoords({ lat: pos.coords.latitude, lng: pos.coords.longitude });
         setStatusMessage("✅ อัปเดตพิกัดลงบล็อกเชนสำเร็จ! ลูกค้าเห็นคุณแล้ว");
       } catch (err) {
+        if (isUserRejected(err)) {
+          setStatusMessage("❌ คุณได้ยกเลิกธุรกรรมใน MetaMask");
+          return;
+        }
         console.error(err);
         setStatusMessage("❌ เกิดข้อผิดพลาดตอนบันทึกพิกัด");
       } finally {
         setIsFetchingGps(false);
       }
-    }, (err) => { 
-      alert(`ไม่สามารถดึงตำแหน่งได้: ${err.message}`); 
-      setIsFetchingGps(false); 
+    }, (err) => {
+      alert(`ไม่สามารถดึงตำแหน่งได้: ${err.message}`);
+      setIsFetchingGps(false);
     }, { enableHighAccuracy: true });
   };
 
@@ -197,7 +216,7 @@ export default function ShipperPage() {
 
     try {
       const product = await contractInstance.products(BigInt(gpsProductId));
-      const rLat = Number(product[8]); 
+      const rLat = Number(product[8]);
       const rLng = Number(product[9]);
 
       if (rLat === 0 && rLng === 0) {
@@ -220,7 +239,7 @@ export default function ShipperPage() {
 
   return (
     <div className="min-h-screen bg-[#F4F7FE] text-slate-800 dark:bg-slate-950 dark:text-slate-100 font-sans">
-      
+
       <nav className="sticky top-0 z-50 border-b border-slate-200/50 bg-white/70 backdrop-blur-xl dark:border-slate-800/60 dark:bg-slate-950/80">
         <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
           <div className="flex h-16 items-center justify-between">
@@ -232,8 +251,8 @@ export default function ShipperPage() {
             </div>
 
             <div className="flex items-center gap-3">
-              <Link 
-                href="/" 
+              <Link
+                href="/"
                 className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white/50 px-4 py-2.5 text-sm font-semibold text-slate-600 shadow-sm transition hover:bg-slate-50 hover:shadow dark:border-slate-800 dark:bg-slate-900 dark:text-slate-300 dark:hover:bg-slate-800"
               >
                 <span>📦</span> ไปหน้าผู้รับ (Receiver)
@@ -244,7 +263,7 @@ export default function ShipperPage() {
       </nav>
 
       <main className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:py-10">
-        
+
         <div className="mb-8 flex flex-col items-start justify-between gap-6 rounded-3xl bg-white p-8 shadow-sm dark:bg-slate-900 md:flex-row md:items-center">
           <div>
             <h1 className="text-3xl font-extrabold tracking-tight text-slate-900 dark:text-white sm:text-4xl">Shipper Dashboard</h1>
@@ -252,7 +271,7 @@ export default function ShipperPage() {
           </div>
 
           {!walletAddress ? (
-            <button 
+            <button
               onClick={connectWallet}
               disabled={isConnecting}
               className="group inline-flex items-center justify-center gap-2 rounded-2xl bg-slate-900 px-8 py-4 text-sm font-bold text-white shadow-lg shadow-slate-300 transition-all hover:bg-slate-800 hover:-translate-y-0.5 active:scale-95 dark:bg-indigo-600 dark:shadow-none dark:hover:bg-indigo-500 disabled:opacity-70"
@@ -288,8 +307,8 @@ export default function ShipperPage() {
             : "border-blue-200 bg-blue-50 text-blue-800 dark:border-blue-900/50 dark:bg-blue-900/20 dark:text-blue-400"
         }`}>
           <span className={`flex h-8 w-8 items-center justify-center rounded-full text-lg shadow-sm ${
-             isSuccessStatus ? "bg-emerald-100 dark:bg-emerald-800/50" 
-             : isErrorStatus ? "bg-red-100 dark:bg-red-800/50" 
+             isSuccessStatus ? "bg-emerald-100 dark:bg-emerald-800/50"
+             : isErrorStatus ? "bg-red-100 dark:bg-red-800/50"
              : "bg-blue-100 dark:bg-blue-800/50"
           }`}>
             {isSuccessStatus ? "✅" : isErrorStatus ? "⚠️" : "ℹ️"}
@@ -298,7 +317,7 @@ export default function ShipperPage() {
         </div>
 
         <div className="grid grid-cols-1 gap-8 lg:grid-cols-12">
-          
+
           <div className="space-y-8 lg:col-span-7">
             <div className="overflow-hidden rounded-3xl bg-white shadow-sm ring-1 ring-slate-200 dark:bg-slate-900 dark:ring-slate-800">
               <div className="border-b border-slate-100 bg-slate-50/50 px-8 py-6 dark:border-slate-800 dark:bg-slate-800/20">
@@ -309,20 +328,20 @@ export default function ShipperPage() {
                 <p className="mt-1 text-sm text-slate-500">กรอกรายละเอียดเพื่อบันทึกสถานะการจัดส่งลงบน Smart Contract</p>
               </div>
               <div className="p-8">
-                <ShipProductCard 
-                  contractInstance={contractInstance} 
-                  walletAddress={walletAddress} 
-                  chainId={chainId} 
-                  sepoliaChainId={SEPOLIA_CHAIN_ID} 
-                  onStatus={setStatusMessage} 
-                  onShipSuccess={handleShipSuccess} 
+                <ShipProductCard
+                  contractInstance={contractInstance}
+                  walletAddress={walletAddress}
+                  chainId={chainId}
+                  sepoliaChainId={SEPOLIA_CHAIN_ID}
+                  onStatus={setStatusMessage}
+                  onShipSuccess={handleShipSuccess}
                 />
               </div>
             </div>
           </div>
 
           <div className="space-y-6 lg:col-span-5">
-            
+
             <div className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-slate-900 to-slate-800 p-8 text-white shadow-lg dark:from-slate-800 dark:to-slate-900">
               <div className="absolute -right-6 -top-6 h-24 w-24 rounded-full bg-indigo-500/20 blur-2xl"></div>
               <h4 className="mb-1 text-sm font-bold text-slate-300 uppercase tracking-wider">Smart Contract</h4>
@@ -336,11 +355,11 @@ export default function ShipperPage() {
             <div className="rounded-3xl bg-white p-8 shadow-sm ring-1 ring-slate-200 dark:bg-slate-900 dark:ring-slate-800">
               <h3 className="text-lg font-bold text-slate-800 dark:text-slate-200 mb-1">📍 จัดการพิกัด (On-chain)</h3>
               <p className="text-xs text-slate-500 mb-5">อัปเดตและติดตามตำแหน่งผ่านบล็อกเชน</p>
-              
+
               <div className="mb-4">
-                <input 
-                  type="text" 
-                  placeholder="ใส่ Product ID ที่ต้องการตรวจสอบ/อัปเดต..." 
+                <input
+                  type="text"
+                  placeholder="ใส่ Product ID ที่ต้องการตรวจสอบ/อัปเดต..."
                   value={gpsProductId}
                   onChange={(e) => setGpsProductId(e.target.value)}
                   className="w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 dark:border-slate-700 dark:bg-slate-950 dark:text-white"
@@ -348,17 +367,17 @@ export default function ShipperPage() {
               </div>
 
               <div className="flex flex-col gap-3">
-                <button 
-                  onClick={trackReceiver} 
-                  disabled={isFetchingGps || !walletAddress} 
+                <button
+                  onClick={trackReceiver}
+                  disabled={isFetchingGps || !walletAddress}
                   className="group flex w-full items-center justify-center gap-2 rounded-2xl bg-indigo-50 py-3.5 font-bold text-indigo-700 transition-all hover:bg-indigo-100 active:scale-[0.98] disabled:opacity-50 dark:bg-indigo-900/30 dark:text-indigo-400 dark:hover:bg-indigo-900/50"
                 >
                   🔍 ดึงพิกัดลูกค้า (Receiver)
                 </button>
 
-                <button 
-                  onClick={handleCheckIn} 
-                  disabled={isFetchingGps || !walletAddress} 
+                <button
+                  onClick={handleCheckIn}
+                  disabled={isFetchingGps || !walletAddress}
                   className="group flex w-full items-center justify-center gap-2 rounded-2xl bg-emerald-50 py-3.5 font-bold text-emerald-700 transition-all hover:bg-emerald-100 active:scale-[0.98] disabled:opacity-50 dark:bg-emerald-900/30 dark:text-emerald-400 dark:hover:bg-emerald-900/50"
                 >
                   {isFetchingGps ? "กำลังดำเนินการ..." : "🎯 อัปเดตพิกัดฉันลงบล็อกเชน"}
@@ -368,12 +387,12 @@ export default function ShipperPage() {
               {coords ? (
                 <div className="mt-6 animate-in fade-in slide-in-from-bottom-2 duration-500">
                   <div className="relative overflow-hidden rounded-2xl border border-slate-200 shadow-sm dark:border-slate-700">
-                    <iframe 
-                      width="100%" 
-                      height="220" 
+                    <iframe
+                      width="100%"
+                      height="220"
                       className="block bg-slate-100 dark:bg-slate-800"
                       frameBorder="0"
-                      src={`https://maps.google.com/maps?q=${coords.lat},${coords.lng}&hl=th&z=15&output=embed`} 
+                      src={`https://maps.google.com/maps?q=${coords.lat},${coords.lng}&hl=th&z=15&output=embed`}
                     />
                   </div>
                   <div className="mt-3 flex justify-center gap-4 rounded-xl bg-slate-50 px-4 py-2 text-xs font-medium text-slate-500 dark:bg-slate-800/50 dark:text-slate-400">
@@ -403,11 +422,11 @@ export default function ShipperPage() {
             </h2>
           </div>
           <div className="p-8">
-            <ExplorerSection 
-              contractAddress={CONTRACT_ADDRESS} 
-              txLimit={25} 
-              refreshToken={trackerRefreshToken} 
-              searchId={searchId} 
+            <ExplorerSection
+              contractAddress={CONTRACT_ADDRESS}
+              txLimit={25}
+              refreshToken={trackerRefreshToken}
+              searchId={searchId}
             />
           </div>
         </div>

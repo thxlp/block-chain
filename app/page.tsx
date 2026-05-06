@@ -12,7 +12,6 @@ import contractABI from "../contractABI.json";
 const CONTRACT_ADDRESS = getSepoliaContractAddress();
 const SEPOLIA_CHAIN_ID = 11155111;
 
-// 🛠️ ฟังก์ชันช่วยแปลง Address ให้อยู่ในรูปแบบมาตรฐาน (ป้องกันปัญหาตัวพิมพ์เล็ก-ใหญ่ไม่ตรงกัน)
 function normalizeAddress(input: string | null): string | null {
   if (!input) return null;
   try {
@@ -20,6 +19,16 @@ function normalizeAddress(input: string | null): string | null {
   } catch {
     return null;
   }
+}
+
+function isUserRejection(err: any): boolean {
+  if (!err) return false;
+  if (err.code === "ACTION_REJECTED") return true;
+  if (err.code === 4001) return true;
+  if (err?.info?.error?.code === 4001) return true;
+  const msg: string = (err?.message ?? "").toLowerCase();
+  if (msg.includes("user denied") || msg.includes("user rejected")) return true;
+  return false;
 }
 
 export default function ReceiverPage() {
@@ -38,17 +47,14 @@ export default function ReceiverPage() {
   const [coords, setCoords] = useState<{lat: number, lng: number} | null>(null);
   const [isFetchingGps, setIsFetchingGps] = useState(false);
 
-  // 🛠️ State ใหม่สำหรับระบบตรวจสอบสิทธิ์
   const [ownerLookupLoading, setOwnerLookupLoading] = useState(false);
   const [ownerAddress, setOwnerAddress] = useState<string | null>(null);
   const [ownerLookupError, setOwnerLookupError] = useState<string | null>(null);
 
-  // 🛠️ คำนวณหาว่า Wallet ที่ต่ออยู่ ตรงกับเจ้าของสินค้าไหม
   const normalizedWallet = useMemo(() => normalizeAddress(walletAddress), [walletAddress]);
   const normalizedOwner = useMemo(() => normalizeAddress(ownerAddress), [ownerAddress]);
   const walletOwnsProduct = normalizedWallet !== null && normalizedWallet === normalizedOwner;
 
-  // 🛠️ เงื่อนไขปุ่มรับสินค้า (ต้องกรอก ID + ไม่ได้โหลดอยู่ + และ "ต้องเป็นเจ้าของ" เท่านั้น)
   const canReceive = Boolean(
     contractInstance && 
     !isReceiving && 
@@ -117,7 +123,6 @@ export default function ReceiverPage() {
     };
   }, [abi]);
 
-  // 🛠️ Effect สำหรับวิ่งไปเช็ค Owner บน Smart Contract ทันทีที่พิมพ์ Product ID
   useEffect(() => {
     const idStr = productId.trim();
     if (!idStr || !contractInstance) {
@@ -138,13 +143,11 @@ export default function ReceiverPage() {
         
         if (!active) return;
 
-        // ถ้ารหัส ID ไม่มีอยู่จริง (id == 0)
         if (BigInt(row[0] ?? row.id) === BigInt(0)) {
           setOwnerLookupError("❌ ไม่พบสินค้านี้ในระบบ");
           return;
         }
 
-        // ดึงที่อยู่กระเป๋าเจ้าของมาเก็บไว้ (Index ที่ 2 คือ owner)
         const ownerRaw = row[2] ?? row.owner;
         setOwnerAddress(ethers.getAddress(String(ownerRaw)));
         
@@ -157,7 +160,7 @@ export default function ReceiverPage() {
       }
     };
 
-    const t = setTimeout(checkOwnership, 500); // หน่วงเวลา 0.5 วิ ตอนพิมพ์เสร็จ
+    const t = setTimeout(checkOwnership, 500);
     return () => {
       active = false;
       clearTimeout(t);
@@ -181,7 +184,11 @@ export default function ReceiverPage() {
       setContractInstance(contract);
       setStatusMessage("เชื่อมต่อ Wallet สำเร็จ");
     } catch (err: any) {
-      setStatusMessage(`Error: ${err?.message}`);
+      if (isUserRejection(err)) {
+        setStatusMessage("❌ คุณได้ยกเลิกการเชื่อมต่อ MetaMask");
+      } else {
+        setStatusMessage(`Error: ${err?.message}`);
+      }
     } finally {
       setIsConnecting(false);
     }
@@ -190,16 +197,21 @@ export default function ReceiverPage() {
   const receiveProduct = async () => {
     if (!contractInstance || !productId) return;
     setIsReceiving(true);
+    setStatusMessage("รอการยืนยันใน MetaMask...");
     try {
       const tx = await contractInstance.receiveProduct(BigInt(productId), { gasLimit: 150000 });
-      setStatusMessage(`รอการยืนยัน...`);
+      setStatusMessage("รอการ confirm บนเครือข่าย...");
       await tx.wait();
       setStatusMessage("✅ รับสินค้าเรียบร้อยแล้ว");
-      
       setSearchId(productId);
       setTrackerRefreshToken(p => p + 1);
     } catch (err: any) {
-      setStatusMessage("❌ เกิดข้อผิดพลาดในการรับสินค้า");
+      if (isUserRejection(err)) {
+        setStatusMessage("❌ คุณได้ยกเลิกธุรกรรมใน MetaMask");
+      } else {
+        console.error(err);
+        setStatusMessage("❌ เกิดข้อผิดพลาดในการรับสินค้า");
+      }
     } finally {
       setIsReceiving(false);
     }
@@ -227,9 +239,13 @@ export default function ReceiverPage() {
         const tx = await contractInstance.updateReceiverLocation(BigInt(productId), lat, lng);
         await tx.wait();
         setStatusMessage("✅ บันทึกพิกัดของคุณสำเร็จแล้ว! Shipper จะเห็นพิกัดคุณ");
-      } catch (err) {
-        console.error(err);
-        setStatusMessage("❌ เกิดข้อผิดพลาดในการบันทึกพิกัด");
+      } catch (err: any) {
+        if (isUserRejection(err)) {
+          setStatusMessage("❌ คุณได้ยกเลิกธุรกรรมใน MetaMask");
+        } else {
+          console.error(err);
+          setStatusMessage("❌ เกิดข้อผิดพลาดในการบันทึกพิกัด");
+        }
       } finally {
         setIsFetchingGps(false);
       }
@@ -259,13 +275,21 @@ export default function ReceiverPage() {
         setCoords({ lat: sLat / 1000000, lng: sLng / 1000000 });
         setStatusMessage("📍 แสดงพิกัดล่าสุดของ Shipper บนแผนที่");
       }
-    } catch (err) {
-      console.error(err);
-      setStatusMessage("❌ ค้นหาข้อมูลไม่พบ");
+    } catch (err: any) {
+      if (isUserRejection(err)) {
+        setStatusMessage("❌ คุณได้ยกเลิกการดำเนินการใน MetaMask");
+      } else {
+        console.error(err);
+        setStatusMessage("❌ ค้นหาข้อมูลไม่พบ");
+      }
     } finally {
       setIsFetchingGps(false);
     }
   };
+
+  // 🛠️ Dynamic status bar colors (เหมือน Shipper)
+  const isErrorStatus = statusMessage.includes("ข้อผิดพลาด") || statusMessage.includes("ไม่พบ") || statusMessage.includes("❌") || statusMessage.includes("Error");
+  const isSuccessStatus = statusMessage.includes("สำเร็จ") || statusMessage.includes("✅");
 
   return (
     <div className="min-h-screen bg-[#F4F7FE] text-slate-800 dark:bg-slate-950 dark:text-slate-100 font-sans">
@@ -307,8 +331,21 @@ export default function ReceiverPage() {
           )}
         </div>
 
-        <div className="mb-8 flex items-center gap-3 rounded-2xl border border-blue-200 bg-blue-50 p-4 text-blue-800 shadow-sm dark:border-blue-900/50 dark:bg-blue-900/20 dark:text-blue-400">
-          <span className="flex h-8 w-8 items-center justify-center rounded-full bg-blue-100 dark:bg-blue-800/50">ℹ️</span>
+        {/* 🛠️ Status bar — dynamic color เหมือน Shipper */}
+        <div className={`mb-8 flex items-center gap-3 rounded-2xl border p-4 shadow-sm transition-all ${
+          isSuccessStatus
+            ? "border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-900/50 dark:bg-emerald-900/20 dark:text-emerald-400"
+            : isErrorStatus
+            ? "border-red-200 bg-red-50 text-red-800 dark:border-red-900/50 dark:bg-red-900/20 dark:text-red-400"
+            : "border-blue-200 bg-blue-50 text-blue-800 dark:border-blue-900/50 dark:bg-blue-900/20 dark:text-blue-400"
+        }`}>
+          <span className={`flex h-8 w-8 items-center justify-center rounded-full text-lg shadow-sm ${
+            isSuccessStatus ? "bg-emerald-100 dark:bg-emerald-800/50"
+            : isErrorStatus ? "bg-red-100 dark:bg-red-800/50"
+            : "bg-blue-100 dark:bg-blue-800/50"
+          }`}>
+            {isSuccessStatus ? "✅" : isErrorStatus ? "⚠️" : "ℹ️"}
+          </span>
           <p className="text-sm font-medium">{statusMessage}</p>
         </div>
 
@@ -331,7 +368,6 @@ export default function ReceiverPage() {
                     />
                   </div>
 
-                  {/* 🛠️ กล่องแจ้งเตือนสิทธิ์การรับสินค้า */}
                   <div className="mt-2 min-h-[24px] text-sm font-medium">
                     {ownerLookupLoading ? (
                       <span className="text-slate-400">กำลังตรวจสอบสิทธิ์...</span>
@@ -352,7 +388,7 @@ export default function ReceiverPage() {
 
                   <div className="flex gap-3 pt-2">
                     <button onClick={receiveProduct} disabled={!canReceive} className="flex-1 rounded-2xl bg-slate-900 px-6 py-4 font-bold text-white dark:bg-emerald-600 disabled:opacity-50 transition-opacity">
-                      ✓ ยืนยันรับสินค้า
+                      {isReceiving ? "กำลังดำเนินการ..." : "✓ ยืนยันรับสินค้า"}
                     </button>
                     <button onClick={() => setProductId("")} className="rounded-2xl border bg-white px-6 py-4 font-bold dark:bg-slate-800 transition-colors">
                       ล้างค่า
@@ -401,7 +437,6 @@ export default function ReceiverPage() {
                   <div className="relative overflow-hidden rounded-2xl border border-slate-200 dark:border-slate-700">
                     <iframe 
                       width="100%" height="220" frameBorder="0"
-                      /* 🛠️ แก้ไข URL Google Maps ที่แตก ให้แสดงผลได้ถูกต้อง */
                       src={`https://maps.google.com/maps?q=${coords.lat},${coords.lng}&hl=th&z=15&output=embed`} 
                       className="block bg-slate-100 dark:bg-slate-800"
                     />
